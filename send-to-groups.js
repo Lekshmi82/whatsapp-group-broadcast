@@ -59,7 +59,11 @@ const STAY_ONLINE_MIN_MS = 90000;  // always stay at least 90 s after the last s
 const STAY_ONLINE_MAX_MS = 300000; // ...and up to 5 min while waiting for "delivered" (ack 2)
 const SYNC_WAIT_MS = 60000;  // time for chats to sync after login
 // How long WhatsApp Web may take to connect. Numbers in many large groups load slowly.
-const CONNECT_TIMEOUT_MS = (Number(process.env.CONNECT_TIMEOUT_SECONDS) || 300) * 1000;
+const CONNECT_TIMEOUT_MS = (Number(process.env.CONNECT_TIMEOUT_SECONDS) || 600) * 1000;
+// Puppeteer gives up on any single request to the page after 3 minutes by default. On the
+// company number WhatsApp Web is busy loading 80+ large groups for longer than that
+// ("Runtime.callFunctionOn timed out"), so allow much longer.
+const PROTOCOL_TIMEOUT_MS = CONNECT_TIMEOUT_MS + 5 * 60 * 1000;
 const READY_TIMEOUT_MS = CONNECT_TIMEOUT_MS + 120000;
 const RETRY_PAUSE_MS = 60000;   // pause before the one automatic connection retry
 const LOG_HEADER = ['time', 'group_id', 'group_name', 'image', 'status', 'ack', 'message_hash', 'message_id', 'error'];
@@ -401,7 +405,7 @@ async function main() {
             // Visible Chrome window by default: on the company number, hidden (headless) mode
             // repeatedly failed to load WhatsApp Web while the visible window connected at once.
             // Set HEADLESS=1 to hide the window.
-            puppeteer: { headless: Boolean(process.env.HEADLESS), defaultViewport: null },
+            puppeteer: { headless: Boolean(process.env.HEADLESS), defaultViewport: null, protocolTimeout: PROTOCOL_TIMEOUT_MS },
         });
         c.on('message_ack', (m, a) => {
             const id = m && m.id && (m.id._serialized || m.id.$1);
@@ -428,7 +432,7 @@ async function main() {
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 await Promise.race([client.destroy().catch(() => {}), sleep(15000)]);
-                if (attempt === 2 || !/did not finish connecting|not ready within/.test(msg)) throw err;
+                if (attempt === 2 || !/did not finish connecting|not ready within|timed out/.test(msg)) throw err;
                 console.log(`\n${msg}\nTrying once more in ${RETRY_PAUSE_MS / 1000}s (nothing has been sent)…\n`);
                 await sleep(RETRY_PAUSE_MS);
             }

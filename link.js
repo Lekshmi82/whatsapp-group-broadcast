@@ -26,7 +26,7 @@ async function main() {
         authTimeoutMs: 120000,
         webVersionCache: { type: 'none' }, // live (latest) WhatsApp Web
         qrMaxRetries: 0, // keep refreshing the QR; our own 10-minute limit applies
-        puppeteer: { headless: false, defaultViewport: null },
+        puppeteer: { headless: false, defaultViewport: null, protocolTimeout: 15 * 60 * 1000 }, // big accounts load slowly
     });
 
     let qrShown = false;
