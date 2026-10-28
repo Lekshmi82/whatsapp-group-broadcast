@@ -58,7 +58,10 @@ const ACK_WAIT_MS = 60000;         // how long to wait for WhatsApp's server to 
 const STAY_ONLINE_MIN_MS = 90000;  // always stay at least 90 s after the last send
 const STAY_ONLINE_MAX_MS = 300000; // ...and up to 5 min while waiting for "delivered" (ack 2)
 const SYNC_WAIT_MS = 60000;  // time for chats to sync after login
-const READY_TIMEOUT_MS = 180000;
+// How long WhatsApp Web may take to connect. Numbers in many large groups load slowly.
+const CONNECT_TIMEOUT_MS = (Number(process.env.CONNECT_TIMEOUT_SECONDS) || 300) * 1000;
+const READY_TIMEOUT_MS = CONNECT_TIMEOUT_MS + 120000;
+const RETRY_PAUSE_MS = 60000;   // pause before the one automatic connection retry
 const LOG_HEADER = ['time', 'group_id', 'group_name', 'image', 'status', 'ack', 'message_hash', 'message_id', 'error'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -306,14 +309,30 @@ function ackLabel(ack) {
 
 async function connect(client) {
     const ready = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('WhatsApp was not ready within 3 minutes.')), READY_TIMEOUT_MS);
+        const timer = setTimeout(() => reject(new Error(`WhatsApp was not ready within ${Math.round(READY_TIMEOUT_MS / 60000)} minutes.`)), READY_TIMEOUT_MS);
         client.once('ready', () => { clearTimeout(timer); resolve(); });
         client.once('auth_failure', (m) => { clearTimeout(timer); reject(new Error(`Login failed: ${m}`)); });
         client.once('disconnected', (r) => { clearTimeout(timer); reject(new Error(`Disconnected: ${r}`)); });
     });
-    client.on('qr', () => console.log('A QR code was requested: the saved login was not accepted. Run "npm.cmd start" once to scan it.'));
-    console.log('Starting WhatsApp Web (saved login)…');
-    await Promise.race([ready, client.initialize().then(() => ready)]);
+    client.on('qr', () => console.log('A QR code was requested: the saved login was not accepted. Run "node .\\link.js" to scan it.'));
+    // Show progress so a slow or stuck connection is visible.
+    let lastPercent = -1;
+    client.on('loading_screen', (percent) => {
+        if (percent !== lastPercent) console.log(`  loading WhatsApp: ${percent}%`);
+        lastPercent = percent;
+    });
+    client.on('change_state', (state) => console.log(`  connection state: ${state}`));
+    client.on('authenticated', () => console.log('  saved login accepted, loading chats…'));
+    console.log(`Starting WhatsApp Web (saved login, up to ${Math.round(CONNECT_TIMEOUT_MS / 60000)} min to connect)…`);
+    try {
+        await Promise.race([ready, client.initialize().then(() => ready)]);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/Waiting failed|auth timeout/.test(msg)) {
+            throw new Error(`WhatsApp Web did not finish connecting within ${Math.round(CONNECT_TIMEOUT_MS / 60000)} min (${msg}).`);
+        }
+        throw err;
+    }
     const version = await client.getWWebVersion().catch(() => 'unknown');
     console.log(`WhatsApp is ready (WhatsApp Web version ${version}, loaded live).`);
 }
@@ -370,28 +389,46 @@ async function main() {
         }
     }
 
-    const client = new Client({
-        authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
-        authTimeoutMs: 120000, // allow up to 2 minutes to connect
-        webVersionCache: { type: 'none' }, // always load the live (latest) WhatsApp Web, never a cached copy
-        qrMaxRetries: 1,
-        puppeteer: { headless: true },
-    });
     const acks = new Map(); // messageId -> best ack seen, for the delivery check after sending
-    client.on('message_ack', (m, a) => {
-        const id = m && m.id && (m.id._serialized || m.id.$1);
-        if (id) acks.set(id, Math.max(a, acks.get(id) ?? 0));
-    });
+    const makeClient = () => {
+        const c = new Client({
+            authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
+            authTimeoutMs: CONNECT_TIMEOUT_MS,
+            webVersionCache: { type: 'none' }, // always load the live (latest) WhatsApp Web, never a cached copy
+            qrMaxRetries: 1,
+            // SHOW_BROWSER=1 opens a visible Chrome window, useful to see what WhatsApp Web shows.
+            puppeteer: { headless: !process.env.SHOW_BROWSER, defaultViewport: null },
+        });
+        c.on('message_ack', (m, a) => {
+            const id = m && m.id && (m.id._serialized || m.id.$1);
+            if (id) acks.set(id, Math.max(a, acks.get(id) ?? 0));
+        });
+        return c;
+    };
+    let client = null;
     let sending = false;
     process.on('SIGINT', async () => {
         console.log(sending ? '\nStopped. Check send-log.csv for what was already sent.' : '\nCancelled. Nothing was sent.');
-        await client.destroy().catch(() => {});
+        if (client) await client.destroy().catch(() => {});
         process.exit(130);
     });
 
     let exitCode = 0;
     try {
-        await connect(client);
+        // Connect, with ONE automatic retry if WhatsApp Web is slow (nothing has been sent yet).
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            client = makeClient();
+            try {
+                await connect(client);
+                break;
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                await Promise.race([client.destroy().catch(() => {}), sleep(15000)]);
+                if (attempt === 2 || !/did not finish connecting|not ready within/.test(msg)) throw err;
+                console.log(`\n${msg}\nTrying once more in ${RETRY_PAUSE_MS / 1000}s (nothing has been sent)…\n`);
+                await sleep(RETRY_PAUSE_MS);
+            }
+        }
         if (mode === 'online') {
             console.log(`Staying connected for ${onlineMinutes} minute(s) so phones can fetch any pending message keys. Nothing will be sent.`);
             await sleep(onlineMinutes * 60000);
@@ -469,7 +506,7 @@ async function main() {
         console.error(`\nFAILED: ${err instanceof Error ? err.message : String(err)}`);
         console.error(sending ? 'Check send-log.csv for what was already sent.' : 'Nothing was sent.');
     } finally {
-        await Promise.race([client.destroy().catch(() => {}), sleep(15000)]);
+        if (client) await Promise.race([client.destroy().catch(() => {}), sleep(15000)]);
         process.exit(exitCode); // always exit here, including after "online" mode
     }
 }
