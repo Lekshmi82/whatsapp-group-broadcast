@@ -327,7 +327,9 @@ async function connect(client) {
     try {
         await Promise.race([ready, client.initialize().then(() => ready)]);
     } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        let msg = err instanceof Error ? err.message : String(err);
+        // Puppeteer hides the real reason of "Waiting failed" in err.cause; show it.
+        if (err && err.cause) msg += `: ${err.cause.message || err.cause}`;
         if (/Waiting failed|auth timeout/.test(msg)) {
             throw new Error(`WhatsApp Web did not finish connecting within ${Math.round(CONNECT_TIMEOUT_MS / 60000)} min (${msg}).`);
         }

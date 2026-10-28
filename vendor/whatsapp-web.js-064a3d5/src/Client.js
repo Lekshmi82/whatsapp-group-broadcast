@@ -138,8 +138,16 @@ class Client extends EventEmitter {
 
             const needAuthHandle = await this.pupPage.waitForFunction(
                 () => {
-                    const state =
-                        window.require?.('WAWebSocketModel')?.Socket?.state;
+                    // LOCAL PATCH (whatsapp-group-broadcast): window.require throws while
+                    // WhatsApp Web is still loading or reloading, which made this wait fail
+                    // at once with "Waiting failed". Treat that as "not ready yet".
+                    let state;
+                    try {
+                        state =
+                            window.require?.('WAWebSocketModel')?.Socket?.state;
+                    } catch (e) {
+                        return false;
+                    }
                     if (
                         !state ||
                         state === 'OPENING' ||
