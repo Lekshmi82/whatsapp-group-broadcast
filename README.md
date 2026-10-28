@@ -10,7 +10,8 @@ npx.cmd puppeteer browsers install chrome
 npm.cmd test
 ```
 
-1. **List groups** (read-only). The first time, scan the QR code: WhatsApp → Linked devices → Link a device.
+0. **Link the number** (first time, or to switch numbers): `node .\link.js` opens a Chrome window with the QR code. Scan it on the phone (WhatsApp → Linked devices → Link a device). It prints which number is linked. To switch numbers, first rename `.wwebjs_auth` (e.g. to `.wwebjs_auth_work`) so the old login is kept.
+1. **List groups** (read-only).
    ```
    node .\send-to-groups.js
    ```
