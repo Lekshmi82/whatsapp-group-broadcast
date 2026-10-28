@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-group-broadcast",
+  "version": "1.0.0",
+  "description": "Read-only WhatsApp group inventory -> groups.csv",
+  "main": "inventory.js",
+  "scripts": {
+    "start": "node inventory.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fluent-ffmpeg": "2.1.3",
+    "mime": "3.0.0",
+    "node-fetch": "2.7.0",
+    "node-webpmux": "3.2.1",
+    "puppeteer": "24.38.0",
+    "qrcode-terminal": "0.12.0"
+  },
+  "private": true
+}

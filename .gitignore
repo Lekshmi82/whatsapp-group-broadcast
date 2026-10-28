@@ -1,0 +1,31 @@
+# WhatsApp session data - grants access to the linked account. NEVER commit/share.
+.wwebjs_auth/
+# Cached WhatsApp Web build files downloaded by the library
+.wwebjs_cache/
+
+# Secrets / local config
+.env
+.env.*
+
+# Dependencies
+node_modules/
+
+# Generated output (contains company group IDs/names - keep local)
+groups*.csv
+*.tmp
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# send-to-groups.js inputs/outputs (company group IDs and messages - keep local)
+targets.txt
+targets-available.txt
+message.txt
+send-log.csv
+image.jpg
+image.jpeg
+image.png
+image.webp
+send-log.old-*.csv
