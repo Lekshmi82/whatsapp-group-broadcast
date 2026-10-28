@@ -6,6 +6,8 @@
 //                                            targets-available.txt (groups you can post to)
 //   node send-to-groups.js send              SEND to the group IDs in targets.txt
 //   node send-to-groups.js send --all        SEND to every group this number can post to
+//   node send-to-groups.js online [minutes]  stay connected (default 5 min) so phones showing
+//                                            "Waiting for this message" can get the keys. Sends nothing.
 //
 // Extra options for send:
 //   --dry-run     do everything except sending (shows the preview)
@@ -51,6 +53,10 @@ const MAX_IMAGE_MB = 5;
 const DEFAULT_GAP_S = 60;          // average pause between groups (random +/- a third)
 const MIN_GAP_S = 15;
 const ACK_WAIT_MS = 60000;         // how long to wait for WhatsApp's server to confirm each message (images take longer)
+// After sending, stay online so recipients' phones can fetch the decryption keys from this
+// device. Closing straight away leaves them on "Waiting for this message".
+const STAY_ONLINE_MIN_MS = 90000;  // always stay at least 90 s after the last send
+const STAY_ONLINE_MAX_MS = 300000; // ...and up to 5 min while waiting for "delivered" (ack 2)
 const SYNC_WAIT_MS = 60000;  // time for chats to sync after login
 const READY_TIMEOUT_MS = 180000;
 const LOG_HEADER = ['time', 'group_id', 'group_name', 'image', 'status', 'ack', 'message_hash', 'message_id', 'error'];
@@ -263,7 +269,7 @@ async function runBatch(client, groups, message, { hash, logFile, pause = makePa
             error = (err instanceof Error ? err.message : String(err)).split('\n')[0];
         }
         appendLog(logFile, [new Date().toISOString(), g.id, g.name, imageName, status, ack, hash, msgId, error]);
-        results.push({ group: g, status, ack, error });
+        results.push({ group: g, status, ack, error, msgId });
         log(`[${i + 1}/${groups.length}] ${status.padEnd(11)} ${g.name}  (${g.id})${error ? ' - ' + error : ''}`);
         if (status !== 'SENT') {
             log('Stopping here so nothing is sent twice by mistake. Check this group on the phone.');
@@ -271,6 +277,29 @@ async function runBatch(client, groups, message, { hash, logFile, pause = makePa
         }
     }
     return results;
+}
+
+/**
+ * Stay connected until every sent message is delivered to a phone (ack >= 2), or the
+ * maximum time passes. Always stays at least minMs. acks: Map of messageId -> best ack.
+ * Returns Map of messageId -> final ack.
+ */
+async function waitForDelivery(acks, msgIds, { minMs = STAY_ONLINE_MIN_MS, maxMs = STAY_ONLINE_MAX_MS, tickMs = 5000, log = console.log } = {}) {
+    const start = Date.now();
+    const delivered = () => msgIds.every((id) => (acks.get(id) ?? 0) >= 2);
+    log(`\nStaying online so the phones can receive and unlock the message (at least ${Math.round(minMs / 1000)}s, up to ${Math.round(maxMs / 60000)} min)…`);
+    while (Date.now() - start < maxMs) {
+        if (Date.now() - start >= minMs && delivered()) break;
+        await sleep(tickMs);
+    }
+    return new Map(msgIds.map((id) => [id, acks.get(id) ?? 0]));
+}
+
+function ackLabel(ack) {
+    if (ack >= 3) return 'READ';
+    if (ack >= 2) return 'DELIVERED';
+    if (ack >= 1) return 'SERVER ONLY (not yet on any phone)';
+    return 'PENDING';
 }
 
 // ------------------------------------------------------- WhatsApp ---------
@@ -285,7 +314,8 @@ async function connect(client) {
     client.on('qr', () => console.log('A QR code was requested: the saved login was not accepted. Run "npm.cmd start" once to scan it.'));
     console.log('Starting WhatsApp Web (saved login)…');
     await Promise.race([ready, client.initialize().then(() => ready)]);
-    console.log('WhatsApp is ready.');
+    const version = await client.getWWebVersion().catch(() => 'unknown');
+    console.log(`WhatsApp is ready (WhatsApp Web version ${version}, loaded live).`);
 }
 
 async function readGroups(client) {
@@ -305,8 +335,17 @@ async function main() {
     const usage = 'Use:  node send-to-groups.js                  (list groups)\n'
         + '      node send-to-groups.js send             (send to targets.txt)\n'
         + '      node send-to-groups.js send --all       (send to every group you can post to)\n'
+        + '      node send-to-groups.js online [minutes] (stay connected, sends nothing)\n'
         + 'Options for send: --dry-run  --no-image  --gap <seconds>';
-    if (!['list', 'send'].includes(mode) || (mode === 'list' && rest.length)) {
+    let onlineMinutes = 5;
+    if (mode === 'online') {
+        if (rest.length > 1 || (rest.length === 1 && !(Number(rest[0]) >= 1 && Number(rest[0]) <= 30))) {
+            console.error('online takes an optional number of minutes from 1 to 30, e.g.  node send-to-groups.js online 5');
+            process.exit(2);
+        }
+        if (rest.length === 1) onlineMinutes = Number(rest[0]);
+    }
+    if (!['list', 'send', 'online'].includes(mode) || (mode === 'list' && rest.length)) {
         console.error(usage);
         process.exit(2);
     }
@@ -334,8 +373,14 @@ async function main() {
     const client = new Client({
         authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '.wwebjs_auth') }),
         authTimeoutMs: 120000, // allow up to 2 minutes to connect
+        webVersionCache: { type: 'none' }, // always load the live (latest) WhatsApp Web, never a cached copy
         qrMaxRetries: 1,
         puppeteer: { headless: true },
+    });
+    const acks = new Map(); // messageId -> best ack seen, for the delivery check after sending
+    client.on('message_ack', (m, a) => {
+        const id = m && m.id && (m.id._serialized || m.id.$1);
+        if (id) acks.set(id, Math.max(a, acks.get(id) ?? 0));
     });
     let sending = false;
     process.on('SIGINT', async () => {
@@ -347,6 +392,12 @@ async function main() {
     let exitCode = 0;
     try {
         await connect(client);
+        if (mode === 'online') {
+            console.log(`Staying connected for ${onlineMinutes} minute(s) so phones can fetch any pending message keys. Nothing will be sent.`);
+            await sleep(onlineMinutes * 60000);
+            console.log('Done. Check the groups on the phones again.');
+            return;
+        }
         const inv = await readGroups(client);
         printGroups(inv); // live list from WhatsApp, in the same run
         fs.writeFileSync(FILES.available, availableTargetsText(inv), 'utf8');
@@ -395,6 +446,19 @@ async function main() {
                         hash, logFile: FILES.log, pause: makePause(opts.gapS), media, imageName: image ? image.name : '',
                     });
                     const ok = results.filter((r) => r.status === 'SENT').length;
+                    const sentResults = results.filter((r) => r.status === 'SENT');
+                    if (sentResults.length) {
+                        const final = await waitForDelivery(acks, sentResults.map((r) => r.msgId));
+                        console.log('\nDelivery:');
+                        for (const r of sentResults) {
+                            const a = Math.max(final.get(r.msgId) ?? 0, r.ack || 0);
+                            console.log(`  ${ackLabel(a).padEnd(36)} ${r.group.name}  (${r.group.id})`);
+                            appendLog(FILES.log, [new Date().toISOString(), r.group.id, r.group.name, image ? image.name : '', a >= 2 ? 'DELIVERED' : 'NOT_DELIVERED_YET', a, hash, r.msgId, '']);
+                        }
+                        if (sentResults.some((r) => Math.max(final.get(r.msgId) ?? 0, r.ack || 0) < 2)) {
+                            console.log('Some messages reached WhatsApp but no phone yet. Run  node .\\send-to-groups.js online  to stay connected longer.');
+                        }
+                    }
                     console.log(`\nRESULT: ${ok} of ${toSend.length} group(s) sent. Details: send-log.csv`);
                     if (ok !== toSend.length) exitCode = 1;
                 }
@@ -406,8 +470,8 @@ async function main() {
         console.error(sending ? 'Check send-log.csv for what was already sent.' : 'Nothing was sent.');
     } finally {
         await Promise.race([client.destroy().catch(() => {}), sleep(15000)]);
+        process.exit(exitCode); // always exit here, including after "online" mode
     }
-    process.exit(exitCode);
 }
 
 if (require.main === module) {
@@ -416,5 +480,5 @@ if (require.main === module) {
 
 module.exports = {
     parseTargets, parseMessage, parseSendOptions, findImage, messageHash, canPost, readSentLog, planBatch,
-    appendLog, availableTargetsText, sendOne, runBatch, MAX_GROUPS_PER_RUN, LOG_HEADER,
+    appendLog, availableTargetsText, sendOne, runBatch, waitForDelivery, ackLabel, MAX_GROUPS_PER_RUN, LOG_HEADER,
 };

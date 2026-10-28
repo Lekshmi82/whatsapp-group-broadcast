@@ -169,3 +169,30 @@ test('an older send-log.csv format is kept (renamed) and a fresh log is started'
     assert.ok(files.some((f) => /^send-log\.old-\d+\.csv$/.test(f)), 'old log kept');
     assert.strictEqual(fs.readFileSync(logFile, 'utf8').split('\r\n')[0], s.LOG_HEADER.join(','));
 });
+
+// ----- delivery wait ("Waiting for this message" fix) -----
+
+test('waitForDelivery stays at least the minimum time, then stops once all are delivered', async () => {
+    const acks = new Map([['m1', 1], ['m2', 1]]);
+    setTimeout(() => { acks.set('m1', 2); acks.set('m2', 3); }, 30);
+    const t0 = Date.now();
+    const final = await s.waitForDelivery(acks, ['m1', 'm2'], { minMs: 60, maxMs: 2000, tickMs: 10, log: () => {} });
+    const took = Date.now() - t0;
+    assert.ok(took >= 60, `stayed ${took}ms, expected >= 60ms`);
+    assert.ok(took < 1000, 'stopped early once delivered');
+    assert.deepStrictEqual([...final], [['m1', 2], ['m2', 3]]);
+});
+
+test('waitForDelivery gives up after the maximum time and reports what it saw', async () => {
+    const acks = new Map([['m1', 1]]);
+    const final = await s.waitForDelivery(acks, ['m1'], { minMs: 10, maxMs: 80, tickMs: 10, log: () => {} });
+    assert.strictEqual(final.get('m1'), 1);
+    assert.strictEqual(s.ackLabel(1), 'SERVER ONLY (not yet on any phone)');
+    assert.strictEqual(s.ackLabel(2), 'DELIVERED');
+    assert.strictEqual(s.ackLabel(3), 'READ');
+});
+
+test('send-to-groups.js always loads the live WhatsApp Web (no cached copy)', () => {
+    const code = fs.readFileSync(path.join(__dirname, '..', 'send-to-groups.js'), 'utf8');
+    assert.match(code, /webVersionCache: \{ type: 'none' \}/);
+});
