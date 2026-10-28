@@ -30,7 +30,7 @@ npm.cmd test
 
 **Verified 28 Oct 2026 on the work number:** text message sent to both LK test Community Announcements groups and received on members' phones (WhatsApp Web 2.3000.1052023215). If phones show "Waiting for this message", run `node .\send-to-groups.js online`. If member counts look too low, relink: rename `.wwebjs_auth`, run `npm.cmd start` and scan the QR again. Also verified from the company number (ending 8705, 82 groups): text to both LK test Communities, received on members' phones. Image sending: not yet tested on the real account.
 
-**If connecting is slow or stuck:** the script allows 5 minutes, shows loading progress, and retries once automatically. Set `$env:CONNECT_TIMEOUT_SECONDS=600` for longer, or `$env:SHOW_BROWSER=1` to watch WhatsApp Web in a visible Chrome window.
+**If connecting is slow or stuck:** the script allows 5 minutes, shows loading progress, and retries once automatically. Set `$env:CONNECT_TIMEOUT_SECONDS=600` for longer, A visible Chrome window opens by default (hidden mode failed to load on the company number); set `$env:HEADLESS=1` to hide it. Don't click in that window while it works.
 
 Never commit or share `.wwebjs_auth/` (it's the WhatsApp login) or any CSV/txt/image output. `.gitignore` already excludes them.
 

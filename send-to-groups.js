@@ -396,8 +396,10 @@ async function main() {
             authTimeoutMs: CONNECT_TIMEOUT_MS,
             webVersionCache: { type: 'none' }, // always load the live (latest) WhatsApp Web, never a cached copy
             qrMaxRetries: 1,
-            // SHOW_BROWSER=1 opens a visible Chrome window, useful to see what WhatsApp Web shows.
-            puppeteer: { headless: !process.env.SHOW_BROWSER, defaultViewport: null },
+            // Visible Chrome window by default: on the company number, hidden (headless) mode
+            // repeatedly failed to load WhatsApp Web while the visible window connected at once.
+            // Set HEADLESS=1 to hide the window.
+            puppeteer: { headless: Boolean(process.env.HEADLESS), defaultViewport: null },
         });
         c.on('message_ack', (m, a) => {
             const id = m && m.id && (m.id._serialized || m.id.$1);
