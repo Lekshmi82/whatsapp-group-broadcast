@@ -28,7 +28,7 @@ npm.cmd test
    ```
    Results appear on screen and in `send-log.csv`.
 
-**Verified 28 Oct 2026 on the work number:** text message sent to both LK test Community Announcements groups and received on members' phones (WhatsApp Web 2.3000.1052023215). If phones show "Waiting for this message", run `node .\send-to-groups.js online`. If member counts look too low, relink: rename `.wwebjs_auth`, run `npm.cmd start` and scan the QR again. Image sending: not yet tested on the real account.
+**Verified 28 Oct 2026 on the work number:** text message sent to both LK test Community Announcements groups and received on members' phones (WhatsApp Web 2.3000.1052023215). If phones show "Waiting for this message", run `node .\send-to-groups.js online`. If member counts look too low, relink: rename `.wwebjs_auth`, run `npm.cmd start` and scan the QR again. Also verified from the company number (ending 8705, 82 groups): text to both LK test Communities, received on members' phones. Image sending: not yet tested on the real account.
 
 **If connecting is slow or stuck:** the script allows 5 minutes, shows loading progress, and retries once automatically. Set `$env:CONNECT_TIMEOUT_SECONDS=600` for longer, or `$env:SHOW_BROWSER=1` to watch WhatsApp Web in a visible Chrome window.
 
