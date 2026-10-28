@@ -125,8 +125,9 @@ test('send-to-groups.js: fixed library, one sendMessage call, no other write ope
 // ----- image + options (added for "message with image to many groups") -----
 
 test('parseSendOptions: --all, --dry-run, --no-image, --gap; refuses unknown options and tiny gaps', () => {
-    assert.deepStrictEqual(s.parseSendOptions([]), { all: false, dryRun: false, noImage: false, gapS: 60 });
-    assert.deepStrictEqual(s.parseSendOptions(['--all', '--dry-run', '--gap', '30']), { all: true, dryRun: true, noImage: false, gapS: 30 });
+    const base = { all: false, dryRun: false, noImage: false, gapS: 60, targetsFile: null, messageFile: null, imageFile: null };
+    assert.deepStrictEqual(s.parseSendOptions([]), base);
+    assert.deepStrictEqual(s.parseSendOptions(['--all', '--dry-run', '--gap', '30']), { ...base, all: true, dryRun: true, gapS: 30 });
     assert.strictEqual(s.parseSendOptions(['--no-image']).noImage, true);
     assert.throws(() => s.parseSendOptions(['--gap', '2']), /at least 15/);
     assert.throws(() => s.parseSendOptions(['--everyone']), /Unknown option/);
@@ -195,4 +196,55 @@ test('waitForDelivery gives up after the maximum time and reports what it saw', 
 test('send-to-groups.js always loads the live WhatsApp Web (no cached copy)', () => {
     const code = fs.readFileSync(path.join(__dirname, '..', 'send-to-groups.js'), 'utf8');
     assert.match(code, /webVersionCache: \{ type: 'none' \}/);
+});
+
+// ----- three batches with their own files, and the read report -----
+
+test('--targets/--message/--image pick per-batch files; conflicting options are refused', () => {
+    const o = s.parseSendOptions(['--targets', 'targets-1.txt', '--message', 'message-1.txt', '--image', 'image-1.jpg', '--gap', '120']);
+    assert.deepStrictEqual([o.targetsFile, o.messageFile, o.imageFile, o.gapS], ['targets-1.txt', 'message-1.txt', 'image-1.jpg', 120]);
+    assert.throws(() => s.parseSendOptions(['--targets']), /needs a file name/);
+    assert.throws(() => s.parseSendOptions(['--message', '--dry-run']), /needs a file name/);
+    assert.throws(() => s.parseSendOptions(['--image', 'a.jpg', '--no-image']), /either --image or --no-image/);
+    assert.throws(() => s.parseSendOptions(['--all', '--targets', 't.txt']), /either --all or --targets/);
+});
+
+test('loadImage accepts jpg/png/webp under 5 MB and refuses other files', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'image-2.JPG'), Buffer.alloc(100, 1));
+    assert.strictEqual(s.loadImage(path.join(dir, 'image-2.JPG')).name, 'image-2.JPG');
+    fs.writeFileSync(path.join(dir, 'poster.pdf'), Buffer.alloc(100, 1));
+    assert.throws(() => s.loadImage(path.join(dir, 'poster.pdf')), /must be a \.jpg/);
+    assert.throws(() => s.loadImage(path.join(dir, 'missing.png')), /not found/);
+});
+
+test('cohortOf reads the cohort from the group name', () => {
+    assert.strictEqual(s.cohortOf('100x | C07 | OpenClaw Workflows Breakdown'), 'C07');
+    assert.strictEqual(s.cohortOf('100x | C09 | Applied GenAI Mastery Cohort 9 Waitlist'), 'C09');
+    assert.strictEqual(s.cohortOf('100xLabs'), 'Other');
+});
+
+test('latestSentPerGroup keeps the newest SENT message per group and ignores failures', () => {
+    const dir = tmp(); const logFile = path.join(dir, 'send-log.csv');
+    s.appendLog(logFile, ['2026-10-28T10:00:00Z', '1@g.us', '100x | C07 | A', '', 'SENT', 1, 'h1', 'msg-old', '']);
+    s.appendLog(logFile, ['2026-10-28T10:00:05Z', '1@g.us', '100x | C07 | A', '', 'DELIVERED', 2, 'h1', 'msg-old', '']);
+    s.appendLog(logFile, ['2026-10-29T10:00:00Z', '1@g.us', '100x | C07 | A', 'image-1.jpg', 'SENT', 1, 'h2', 'msg-new', '']);
+    s.appendLog(logFile, ['2026-10-29T10:02:00Z', '2@g.us', '100x | C08 | B', '', 'FAILED', '', 'h3', '', 'oops']);
+    const m = s.latestSentPerGroup(logFile);
+    assert.deepStrictEqual([...m.keys()], ['1@g.us']);
+    assert.strictEqual(m.get('1@g.us').msgId, 'msg-new');
+});
+
+test('summarizeByCohort adds up read counts and flags groups without data', () => {
+    const out = s.summarizeByCohort([
+        { cohort: 'C07', read: 100, delivered: 50, notRead: 300 },
+        { cohort: 'C07', read: 20, delivered: 5, notRead: 40 },
+        { cohort: 'C08', read: null, delivered: null, notRead: null },
+        { cohort: 'C06', read: 7, delivered: 1, notRead: 2 },
+    ]);
+    assert.deepStrictEqual(out, [
+        { cohort: 'C06', groups: 1, read: 7, delivered: 1, notRead: 2, unknown: 0 },
+        { cohort: 'C07', groups: 2, read: 120, delivered: 55, notRead: 340, unknown: 0 },
+        { cohort: 'C08', groups: 1, read: 0, delivered: 0, notRead: 0, unknown: 1 },
+    ]);
 });

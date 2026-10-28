@@ -6,6 +6,8 @@
 //                                            targets-available.txt (groups you can post to)
 //   node send-to-groups.js send              SEND to the group IDs in targets.txt
 //   node send-to-groups.js send --all        SEND to every group this number can post to
+//   node send-to-groups.js report           how many READ the last message in each group (counts only),
+//                                            per group and per cohort; saves read-report.csv. Sends nothing.
 //   node send-to-groups.js online [minutes]  stay connected (default 5 min) so phones showing
 //                                            "Waiting for this message" can get the keys. Sends nothing.
 //
@@ -13,6 +15,9 @@
 //   --dry-run     do everything except sending (shows the preview)
 //   --no-image    send text only even if an image file is present
 //   --gap <s>     average seconds between groups (default 60, minimum 15)
+//   --targets <file>  use this targets file instead of targets.txt   (e.g. targets-1.txt)
+//   --message <file>  use this message file instead of message.txt   (e.g. message-1.txt)
+//   --image <file>    send this image (jpg/png/webp) instead of looking for image.jpg/png
 //
 // Files (all in this folder, all stay on this laptop):
 //   targets.txt          one group ID per line (text after the ID is ignored; # = comment)
@@ -45,6 +50,7 @@ const FILES = {
     message: path.join(__dirname, 'message.txt'),
     available: path.join(__dirname, 'targets-available.txt'),
     log: path.join(__dirname, 'send-log.csv'),
+    report: path.join(__dirname, 'read-report.csv'),
 };
 const MAX_GROUPS_PER_RUN = 30;
 const MAX_MESSAGE_LENGTH = 4096;   // WhatsApp's practical limit for text and captions
@@ -74,7 +80,12 @@ const makePause = (gapS) => () => sleep(gapS * 1000 * (2 / 3 + Math.random() * 2
 
 /** Read the command line after "send". */
 function parseSendOptions(args) {
-    const opts = { all: false, dryRun: false, noImage: false, gapS: DEFAULT_GAP_S };
+    const opts = { all: false, dryRun: false, noImage: false, gapS: DEFAULT_GAP_S, targetsFile: null, messageFile: null, imageFile: null };
+    const fileArg = (name, i) => {
+        const v = args[i];
+        if (!v || v.startsWith('--')) throw new Error(`${name} needs a file name, e.g. ${name} ${name.slice(2)}-1.txt`);
+        return v;
+    };
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (a === '--all') opts.all = true;
@@ -84,21 +95,71 @@ function parseSendOptions(args) {
             const n = Number(args[++i]);
             if (!Number.isFinite(n) || n < MIN_GAP_S) throw new Error(`--gap must be a number of seconds, at least ${MIN_GAP_S}.`);
             opts.gapS = n;
-        } else throw new Error(`Unknown option "${a}". Options: --all, --dry-run, --no-image, --gap <seconds>`);
+        } else if (a === '--targets') opts.targetsFile = fileArg(a, ++i);
+        else if (a === '--message') opts.messageFile = fileArg(a, ++i);
+        else if (a === '--image') opts.imageFile = fileArg(a, ++i);
+        else throw new Error(`Unknown option "${a}". Options: --all, --dry-run, --no-image, --gap <seconds>, --targets <file>, --message <file>, --image <file>`);
     }
+    if (opts.noImage && opts.imageFile) throw new Error('Use either --image or --no-image, not both.');
+    if (opts.all && opts.targetsFile) throw new Error('Use either --all or --targets, not both.');
     return opts;
 }
 
-/** Find the optional image in the folder. Returns null (text only) or { path, name, mb }. */
+/** Check one image file. Returns { path, name, mb }. */
+function loadImage(file) {
+    const name = path.basename(file);
+    if (!fs.existsSync(file)) throw new Error(`Image ${name} was not found in the project folder.`);
+    if (!/\.(jpe?g|png|webp)$/i.test(name)) throw new Error(`${name} must be a .jpg, .jpeg, .png or .webp image.`);
+    const mb = fs.statSync(file).size / 1e6;
+    if (mb > MAX_IMAGE_MB) throw new Error(`${name} is ${mb.toFixed(1)} MB; keep images under ${MAX_IMAGE_MB} MB.`);
+    if (mb === 0) throw new Error(`${name} is empty.`);
+    return { path: file, name, mb };
+}
+
+/** Find the optional image.jpg/png in the folder. Returns null (text only) or { path, name, mb }. */
 function findImage(dir) {
     const found = IMAGE_NAMES.filter((n) => fs.existsSync(path.join(dir, n)));
     if (found.length > 1) throw new Error(`Found more than one image (${found.join(', ')}). Keep only one, or use --no-image.`);
     if (!found.length) return null;
-    const file = path.join(dir, found[0]);
-    const mb = fs.statSync(file).size / 1e6;
-    if (mb > MAX_IMAGE_MB) throw new Error(`${found[0]} is ${mb.toFixed(1)} MB; keep images under ${MAX_IMAGE_MB} MB.`);
-    if (mb === 0) throw new Error(`${found[0]} is empty.`);
-    return { path: file, name: found[0], mb };
+    return loadImage(path.join(dir, found[0]));
+}
+
+// ------------------------------------------------------------ report -----
+
+/** "C07" from "100x | C07 | Some webinar", else "Other". */
+function cohortOf(name) {
+    const m = /\|\s*(C\d{2})\s*\|/i.exec(name || '');
+    return m ? m[1].toUpperCase() : 'Other';
+}
+
+/** The most recent SENT message per group from send-log.csv: Map group_id -> row. */
+function latestSentPerGroup(file) {
+    const latest = new Map();
+    if (!fs.existsSync(file)) return latest;
+    const rows = parseCsv(fs.readFileSync(file, 'utf8'));
+    const header = rows.shift() || [];
+    const col = (n) => header.indexOf(n);
+    for (const r of rows) {
+        if (r[col('status')] !== 'SENT' || !r[col('message_id')]) continue;
+        latest.set(r[col('group_id')], {
+            groupId: r[col('group_id')], name: r[col('group_name')], time: r[col('time')],
+            msgId: r[col('message_id')], image: r[col('image')] || '',
+        });
+    }
+    return latest;
+}
+
+/** Add up read counts per cohort. rows: [{cohort, read, delivered, notRead}] */
+function summarizeByCohort(rows) {
+    const sum = new Map();
+    for (const r of rows) {
+        const s0 = sum.get(r.cohort) || { cohort: r.cohort, groups: 0, read: 0, delivered: 0, notRead: 0, unknown: 0 };
+        s0.groups++;
+        if (r.read === null) s0.unknown++;
+        else { s0.read += r.read; s0.delivered += r.delivered; s0.notRead += r.notRead; }
+        sum.set(r.cohort, s0);
+    }
+    return [...sum.values()].sort((a, b) => a.cohort.localeCompare(b.cohort));
 }
 
 // --------------------------------------------------------- input files ----
@@ -360,6 +421,7 @@ async function main() {
     const usage = 'Use:  node send-to-groups.js                  (list groups)\n'
         + '      node send-to-groups.js send             (send to targets.txt)\n'
         + '      node send-to-groups.js send --all       (send to every group you can post to)\n'
+        + '      node send-to-groups.js report           (how many read the last message per group)\n'
         + '      node send-to-groups.js online [minutes] (stay connected, sends nothing)\n'
         + 'Options for send: --dry-run  --no-image  --gap <seconds>';
     let onlineMinutes = 5;
@@ -370,7 +432,7 @@ async function main() {
         }
         if (rest.length === 1) onlineMinutes = Number(rest[0]);
     }
-    if (!['list', 'send', 'online'].includes(mode) || (mode === 'list' && rest.length)) {
+    if (!['list', 'send', 'online', 'report'].includes(mode) || ((mode === 'list' || mode === 'report') && rest.length)) {
         console.error(usage);
         process.exit(2);
     }
@@ -381,11 +443,13 @@ async function main() {
         try {
             opts = parseSendOptions(rest);
             if (!opts.dryRun && !process.stdin.isTTY) throw new Error('SEND must be run by a person in a terminal (it asks for confirmation).');
+            const inFolder = (f) => path.resolve(__dirname, f);
             if (!opts.all) {
-                ids = parseTargets(readFileOrExplain(FILES.targets, 'Run LIST first and create targets.txt from targets-available.txt, or use: send --all'));
+                ids = parseTargets(readFileOrExplain(opts.targetsFile ? inFolder(opts.targetsFile) : FILES.targets,
+                    'Run LIST first and create the targets file from targets-available.txt, or use: send --all'));
             }
-            message = parseMessage(readFileOrExplain(FILES.message, 'Create message.txt with the text to send.'));
-            image = opts.noImage ? null : findImage(__dirname);
+            message = parseMessage(readFileOrExplain(opts.messageFile ? inFolder(opts.messageFile) : FILES.message, 'Create the message file with the text to send.'));
+            image = opts.noImage ? null : (opts.imageFile ? loadImage(inFolder(opts.imageFile)) : findImage(__dirname));
             const imageBytes = image ? fs.readFileSync(image.path) : null;
             if (image) media = MessageMedia.fromFilePath(image.path);
             hash = messageHash(message, imageBytes);
@@ -441,6 +505,47 @@ async function main() {
             console.log(`Staying connected for ${onlineMinutes} minute(s) so phones can fetch any pending message keys. Nothing will be sent.`);
             await sleep(onlineMinutes * 60000);
             console.log('Done. Check the groups on the phones again.');
+            return;
+        }
+        if (mode === 'report') {
+            const sent = [...latestSentPerGroup(FILES.log).values()];
+            if (!sent.length) {
+                console.log('send-log.csv has no sent messages yet. Nothing to report.');
+                return;
+            }
+            console.log(`Waiting ${SYNC_WAIT_MS / 1000}s so WhatsApp can load the latest read receipts…`);
+            await sleep(SYNC_WAIT_MS);
+            const rows = [];
+            for (const e of sent) {
+                let info = null;
+                try {
+                    const m = await client.getMessageById(e.msgId);
+                    info = m ? await m.getInfo() : null;
+                } catch (err) {
+                    info = null;
+                }
+                rows.push({
+                    cohort: cohortOf(e.name), name: e.name, groupId: e.groupId, sentAt: e.time,
+                    read: info && Array.isArray(info.read) ? info.read.length : null,
+                    delivered: info && Array.isArray(info.delivery) ? info.delivery.length : null,
+                    notRead: info && typeof info.readRemaining === 'number' ? info.readRemaining : null,
+                });
+            }
+            rows.sort((a, b) => a.cohort.localeCompare(b.cohort) || a.name.localeCompare(b.name));
+            const show = (v) => (v === null ? '?' : String(v));
+            console.log('\nREAD    DELIVERED  NOT READ  COHORT  GROUP');
+            for (const r of rows) {
+                console.log(`${show(r.read).padEnd(7)} ${show(r.delivered).padEnd(10)} ${show(r.notRead).padEnd(9)} ${r.cohort.padEnd(7)} ${r.name}`);
+            }
+            console.log('\nBy cohort:');
+            for (const c of summarizeByCohort(rows)) {
+                console.log(`  ${c.cohort.padEnd(6)} ${c.groups} group(s): ${c.read} read, ${c.delivered} delivered but not read yet${c.unknown ? `, ${c.unknown} group(s) without data` : ''}`);
+            }
+            const header = ['checked_at', 'cohort', 'group_name', 'group_id', 'sent_at', 'read', 'delivered_not_read', 'not_read_yet'];
+            const now = new Date().toISOString();
+            fs.writeFileSync(FILES.report, [header, ...rows.map((r) => [now, r.cohort, r.name, r.groupId, r.sentAt, r.read ?? '', r.delivered ?? '', r.notRead ?? ''])]
+                .map((row) => row.map(csvEscape).join(',')).join('\r\n') + '\r\n', 'utf8');
+            console.log('\nSaved read-report.csv. "Read" counts only people with read receipts on, so the real number is higher.');
             return;
         }
         const inv = await readGroups(client);
@@ -524,6 +629,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-    parseTargets, parseMessage, parseSendOptions, findImage, messageHash, canPost, readSentLog, planBatch,
+    parseTargets, parseMessage, parseSendOptions, findImage, loadImage, cohortOf, latestSentPerGroup, summarizeByCohort, messageHash, canPost, readSentLog, planBatch,
     appendLog, availableTargetsText, sendOne, runBatch, waitForDelivery, ackLabel, MAX_GROUPS_PER_RUN, LOG_HEADER,
 };

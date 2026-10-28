@@ -29,3 +29,12 @@ image.jpeg
 image.png
 image.webp
 send-log.old-*.csv
+
+# per-batch inputs and reports (company data - keep local)
+targets-*.txt
+message-*.txt
+image-*.jpg
+image-*.jpeg
+image-*.png
+image-*.webp
+read-report*.csv
