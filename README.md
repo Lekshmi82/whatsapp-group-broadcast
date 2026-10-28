@@ -27,6 +27,8 @@ npm.cmd test
    ```
    Results appear on screen and in `send-log.csv`.
 
+**Verified 28 Oct 2026 on the work number:** text message sent to both LK test Community Announcements groups and received on members' phones (WhatsApp Web 2.3000.1052023215). If phones show "Waiting for this message", run `node .\send-to-groups.js online`. If member counts look too low, relink: rename `.wwebjs_auth`, run `npm.cmd start` and scan the QR again. Image sending: not yet tested on the real account.
+
 Never commit or share `.wwebjs_auth/` (it's the WhatsApp login) or any CSV/txt/image output. `.gitignore` already excludes them.
 
 ---
