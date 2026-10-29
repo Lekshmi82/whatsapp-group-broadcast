@@ -2,7 +2,28 @@
 
 Send one message (optionally with an image) to chosen WhatsApp groups from the work number, and list every group with its ID. Built on whatsapp-web.js. It's unofficial, so keep volume low.
 
-## Quick start (Windows, VS Code terminal)
+## Easiest way: the WhatsApp Panel (no typing commands)
+
+A web page that runs **on your own computer** (it is not on the internet). It keeps one WhatsApp connection open and lets you:
+
+1. **Connect:** scan the QR code shown on the page (WhatsApp → Linked devices → Link a device). It then shows "Connected: number ending in …". There's also a **Switch number** button; the old login is kept, renamed, never deleted.
+2. **Choose groups:** a dropdown with search, tick-boxes and one-click cohort buttons (C06, C07, …, detected from names like "| C07 |"). Groups you can't post to are greyed out.
+3. **Image:** drag and drop the poster. WEBP is turned into JPG automatically so it never arrives as a sticker.
+4. **Message:** type it, with a live WhatsApp-style preview (bold, italics, links).
+5. **Send:** choose the speed (Safe ≈2 min, Normal ≈1 min, Fast ≈15 s between groups), optionally **Send test** to one group, then **Review & send** and type `SEND <number>` to confirm. Live progress shows Sent, Delivered or Failed, with **Stop** and **Retry failed**. Groups that already got the same message and image are skipped.
+6. **Who read it:** read counts per group and per cohort, **Download CSV** and **Copy for Google Sheet**.
+7. **History** of every send.
+
+**Start it on Windows:**
+- **First time:** double-click `Setup.bat`, which installs everything.
+- **Every time after:** double-click `Start WhatsApp Panel.bat`. Your browser opens the panel. Keep the black panel window open while you use it. A Chrome window with WhatsApp Web opens too; leave it (minimising is fine) and don't click in it.
+- **Mac/Linux:** `npm install`, then `npm run panel`.
+
+**Safety:**
+- It only listens on this computer (127.0.0.1), and every request needs a secret key stored in `.panel-token`. The desktop shortcut opens the page with it.
+- The WhatsApp login (`.wwebjs_auth`) stays on the computer and is git-ignored.
+
+## Command-line use (PowerShell)
 
 ```
 npm.cmd install

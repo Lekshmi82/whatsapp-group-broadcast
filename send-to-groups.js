@@ -149,6 +149,32 @@ function latestSentPerGroup(file) {
     return latest;
 }
 
+/**
+ * Ask WhatsApp for the read receipts of each sent message. Returns counts only
+ * (never names or numbers): [{cohort, name, groupId, sentAt, read, delivered, notRead}].
+ * A count is null when WhatsApp gave no information for that message.
+ */
+async function collectReadCounts(client, sentEntries) {
+    const rows = [];
+    for (const e of sentEntries) {
+        let info = null;
+        try {
+            const m = await client.getMessageById(e.msgId);
+            info = m ? await m.getInfo() : null;
+        } catch (err) {
+            info = null;
+        }
+        rows.push({
+            cohort: cohortOf(e.name), name: e.name, groupId: e.groupId, sentAt: e.time,
+            read: info && Array.isArray(info.read) ? info.read.length : null,
+            delivered: info && Array.isArray(info.delivery) ? info.delivery.length : null,
+            notRead: info && typeof info.readRemaining === 'number' ? info.readRemaining : null,
+        });
+    }
+    rows.sort((a, b) => a.cohort.localeCompare(b.cohort) || a.name.localeCompare(b.name));
+    return rows;
+}
+
 /** Add up read counts per cohort. rows: [{cohort, read, delivered, notRead}] */
 function summarizeByCohort(rows) {
     const sum = new Map();
@@ -323,11 +349,13 @@ async function sendOne(client, groupId, message, ackWaitMs = ACK_WAIT_MS, media 
  * Send to each group in order. Stops at the first failure or unconfirmed send.
  * Every attempt is written to the log. Returns one result per attempted group.
  */
-async function runBatch(client, groups, message, { hash, logFile, pause = makePause(DEFAULT_GAP_S), ackWaitMs = ACK_WAIT_MS, log = console.log, media = null, imageName = '' }) {
+async function runBatch(client, groups, message, { hash, logFile, pause = makePause(DEFAULT_GAP_S), ackWaitMs = ACK_WAIT_MS, log = console.log, media = null, imageName = '', shouldStop = () => false, onResult = () => {} }) {
     const results = [];
     for (let i = 0; i < groups.length; i++) {
         const g = groups[i];
         if (i > 0) { log('   waiting before the next group…'); await pause(); }
+        // A "Stop" request is honoured between groups, never in the middle of a send.
+        if (shouldStop()) { log('Stopped on request. The remaining groups were not sent.'); break; }
         let status; let ack = ''; let msgId = ''; let error = '';
         try {
             ({ msgId, ack } = await sendOne(client, g.id, message, ackWaitMs, media));
@@ -338,6 +366,7 @@ async function runBatch(client, groups, message, { hash, logFile, pause = makePa
         }
         appendLog(logFile, [new Date().toISOString(), g.id, g.name, imageName, status, ack, hash, msgId, error]);
         results.push({ group: g, status, ack, error, msgId });
+        onResult({ index: i, group: g, status, ack, error, msgId });
         log(`[${i + 1}/${groups.length}] ${status.padEnd(11)} ${g.name}  (${g.id})${error ? ' - ' + error : ''}`);
         if (status !== 'SENT') {
             log('Stopping here so nothing is sent twice by mistake. Check this group on the phone.');
@@ -515,23 +544,7 @@ async function main() {
             }
             console.log(`Waiting ${SYNC_WAIT_MS / 1000}s so WhatsApp can load the latest read receipts…`);
             await sleep(SYNC_WAIT_MS);
-            const rows = [];
-            for (const e of sent) {
-                let info = null;
-                try {
-                    const m = await client.getMessageById(e.msgId);
-                    info = m ? await m.getInfo() : null;
-                } catch (err) {
-                    info = null;
-                }
-                rows.push({
-                    cohort: cohortOf(e.name), name: e.name, groupId: e.groupId, sentAt: e.time,
-                    read: info && Array.isArray(info.read) ? info.read.length : null,
-                    delivered: info && Array.isArray(info.delivery) ? info.delivery.length : null,
-                    notRead: info && typeof info.readRemaining === 'number' ? info.readRemaining : null,
-                });
-            }
-            rows.sort((a, b) => a.cohort.localeCompare(b.cohort) || a.name.localeCompare(b.name));
+            const rows = await collectReadCounts(client, sent);
             const show = (v) => (v === null ? '?' : String(v));
             console.log('\nREAD    DELIVERED  NOT READ  COHORT  GROUP');
             for (const r of rows) {
@@ -629,6 +642,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-    parseTargets, parseMessage, parseSendOptions, findImage, loadImage, cohortOf, latestSentPerGroup, summarizeByCohort, messageHash, canPost, readSentLog, planBatch,
+    parseTargets, parseMessage, parseSendOptions, findImage, loadImage, cohortOf, latestSentPerGroup, summarizeByCohort, collectReadCounts, messageHash,
+    readGroups, FILES, MAX_MESSAGE_LENGTH, MAX_IMAGE_MB, canPost, readSentLog, planBatch,
     appendLog, availableTargetsText, sendOne, runBatch, waitForDelivery, ackLabel, MAX_GROUPS_PER_RUN, LOG_HEADER,
 };

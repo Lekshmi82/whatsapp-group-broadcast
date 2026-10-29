@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp Broadcast Panel</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>WhatsApp Broadcast Panel</h1>
+    <span id="conn-pill" class="pill pill-wait">Starting…</span>
+  </header>
+
+  <main id="app">
+    <p id="token-warning" class="banner banner-error" hidden>
+      Open the panel from the desktop shortcut "Start WhatsApp Panel". This page was opened without its access key.
+    </p>
+
+    <!-- 1. Connection -->
+    <section class="card" id="card-connection" aria-labelledby="h-conn">
+      <h2 id="h-conn"><span class="step">1</span> WhatsApp connection</h2>
+      <p id="conn-detail" class="muted">Starting WhatsApp…</p>
+      <div id="qr-box" class="qr-box" hidden></div>
+      <div id="conn-info" hidden>
+        <p class="connected-line">Connected: number ending in <strong id="me-last4"></strong> <span id="me-name" class="muted"></span></p>
+        <p class="muted small" id="wa-version"></p>
+      </div>
+      <div class="row-actions">
+        <button type="button" id="btn-reconnect" class="btn btn-secondary">Reconnect</button>
+        <button type="button" id="btn-switch" class="btn btn-secondary">Switch number</button>
+      </div>
+    </section>
+
+    <!-- 2. Groups -->
+    <section class="card" id="card-groups" aria-labelledby="h-groups">
+      <h2 id="h-groups"><span class="step">2</span> Choose groups</h2>
+      <div class="dropdown" id="group-dropdown">
+        <button type="button" id="btn-groups" class="dropdown-toggle" aria-expanded="false" aria-controls="group-panel">
+          <span id="groups-label">Groups are loading…</span><span aria-hidden="true">▾</span>
+        </button>
+        <div id="group-panel" class="dropdown-panel" hidden>
+          <input type="search" id="group-search" placeholder="Search groups…" aria-label="Search groups">
+          <div class="chips" id="cohort-chips" aria-label="Select a whole cohort"></div>
+          <div class="row-actions small">
+            <button type="button" class="btn-link" id="btn-select-visible">Select all shown</button>
+            <button type="button" class="btn-link" id="btn-clear">Clear selection</button>
+            <button type="button" class="btn-link" id="btn-refresh">Refresh groups</button>
+          </div>
+          <ul id="group-list" class="group-list" role="listbox" aria-multiselectable="true"></ul>
+        </div>
+      </div>
+      <p id="groups-summary" class="summary">No groups selected.</p>
+    </section>
+
+    <!-- 3 + 4. Image and message, with preview -->
+    <section class="card two-col" id="card-compose" aria-labelledby="h-compose">
+      <div>
+        <h2 id="h-compose"><span class="step">3</span> Image <span class="muted small">(optional)</span></h2>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop an image here or click to choose one">
+          <p><strong>Drag &amp; drop</strong> the poster here<br><span class="muted small">or click to choose · JPG / PNG / WEBP, under 5 MB</span></p>
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" hidden>
+        </div>
+        <div id="image-info" class="image-info" hidden>
+          <span id="image-name"></span>
+          <button type="button" class="btn-link" id="btn-remove-image">Remove</button>
+        </div>
+
+        <h2><span class="step">4</span> Message</h2>
+        <textarea id="message" rows="12" placeholder="Type the announcement. WhatsApp formatting works: *bold*, _italic_, ~strike~, ```monospace```."></textarea>
+        <p class="muted small"><span id="char-count">0</span> / 4096 characters</p>
+      </div>
+      <div>
+        <h2>Preview</h2>
+        <div class="phone">
+          <div class="bubble">
+            <img id="preview-img" alt="" hidden>
+            <div id="preview-text" class="bubble-text"><span class="muted">Your message will appear here.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Send -->
+    <section class="card" id="card-send" aria-labelledby="h-send">
+      <h2 id="h-send"><span class="step">5</span> Send</h2>
+      <fieldset class="speed">
+        <legend>Speed between groups</legend>
+        <label><input type="radio" name="speed" value="safe" checked> Safe (about 2 min)</label>
+        <label><input type="radio" name="speed" value="normal"> Normal (about 1 min)</label>
+        <label><input type="radio" name="speed" value="fast"> Fast (about 15 s)</label>
+      </fieldset>
+      <p class="muted small" id="eta"></p>
+      <div class="test-row">
+        <label for="test-group">Send a test first to:</label>
+        <select id="test-group"><option value="">Choose a test group…</option></select>
+        <button type="button" id="btn-test" class="btn btn-secondary">Send test</button>
+      </div>
+      <button type="button" id="btn-review" class="btn btn-primary">Review &amp; send</button>
+      <p id="send-error" class="error" role="alert" hidden></p>
+    </section>
+
+    <!-- Progress -->
+    <section class="card" id="card-progress" aria-labelledby="h-progress" hidden>
+      <h2 id="h-progress">Sending</h2>
+      <div class="progress"><div id="progress-bar" class="progress-bar" style="width:0%"></div></div>
+      <p id="progress-text" class="summary"></p>
+      <ul id="progress-list" class="progress-list"></ul>
+      <div class="row-actions">
+        <button type="button" id="btn-stop" class="btn btn-danger">Stop after current group</button>
+        <button type="button" id="btn-retry" class="btn btn-secondary" hidden>Retry failed groups</button>
+      </div>
+    </section>
+
+    <!-- 6. Read counts -->
+    <section class="card" id="card-report" aria-labelledby="h-report">
+      <h2 id="h-report"><span class="step">6</span> Who read it</h2>
+      <p class="muted small">Counts people with read receipts on, so the real number who saw it is higher. Shows the latest message in each group.</p>
+      <div class="row-actions">
+        <button type="button" id="btn-report" class="btn btn-secondary">Check read counts</button>
+        <a id="link-csv" class="btn btn-secondary" href="#" hidden>Download CSV</a>
+        <button type="button" id="btn-copy" class="btn btn-secondary" hidden>Copy for Google Sheet</button>
+      </div>
+      <div id="report-cohorts" class="cohort-bars"></div>
+      <div class="table-wrap"><table id="report-table" hidden>
+        <thead><tr><th>Cohort</th><th>Group</th><th class="num">Read</th><th class="num">Delivered, not read</th><th class="num">Not read yet</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- 7. History -->
+    <section class="card" id="card-history" aria-labelledby="h-history">
+      <h2 id="h-history"><span class="step">7</span> History</h2>
+      <div class="table-wrap"><table id="history-table">
+        <thead><tr><th>When</th><th>Message</th><th>Image</th><th class="num">Groups</th><th class="num">Sent</th><th class="num">Failed</th></tr></thead>
+        <tbody><tr><td colspan="6" class="muted">Nothing sent yet.</td></tr></tbody>
+      </table></div>
+    </section>
+  </main>
+
+  <!-- Confirm dialog -->
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <form method="dialog" id="confirm-form">
+      <h2 id="confirm-title">Check before sending</h2>
+      <p id="confirm-summary" class="summary"></p>
+      <ul id="confirm-list" class="confirm-list"></ul>
+      <p id="confirm-skipped" class="muted small"></p>
+      <label for="confirm-input">Type <strong id="confirm-word"></strong> to send:</label>
+      <input id="confirm-input" autocomplete="off" spellcheck="false">
+      <p id="confirm-error" class="error" role="alert" hidden></p>
+      <div class="row-actions">
+        <button type="button" id="btn-confirm-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" id="btn-confirm-send" class="btn btn-primary">Send now</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

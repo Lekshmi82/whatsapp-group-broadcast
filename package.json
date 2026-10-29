@@ -5,7 +5,8 @@
   "main": "inventory.js",
   "scripts": {
     "start": "node inventory.js",
-    "test": "node --test"
+    "test": "node --test",
+    "panel": "node panel/server.js"
   },
   "dependencies": {
     "fluent-ffmpeg": "2.1.3",

@@ -38,3 +38,8 @@ image-*.jpeg
 image-*.png
 image-*.webp
 read-report*.csv
+
+# panel: access key, saved message texts, old logins kept after "Switch number"
+.panel-token
+sent-messages/
+.wwebjs_auth_*/
