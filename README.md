@@ -2,6 +2,8 @@
 
 Send one message (optionally with an image) to chosen WhatsApp groups from the work number, and list every group with its ID. Built on whatsapp-web.js. It's unofficial, so keep volume low.
 
+**For teammates: see [TEAM-GUIDE.md](TEAM-GUIDE.md) (install + use in 7 steps).**
+
 ## Easiest way: the WhatsApp Panel (no typing commands)
 
 A web page that runs **on your own computer** (it is not on the internet). It keeps one WhatsApp connection open and lets you:
